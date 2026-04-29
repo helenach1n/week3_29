@@ -1,0 +1,42 @@
+{
+  "entities": {
+    "Review": {
+      "title": "Review",
+      "description": "A food review for a campus dish.",
+      "type": "object",
+      "properties": {
+        "dishName": { "type": "string", "description": "Name of the dish" },
+        "restaurantName": { "type": "string", "description": "Name of the restaurant or canteen" },
+        "content": { "type": "string", "description": "Text content of the review" },
+        "rating": { "type": "number", "description": "Rating from 1 to 5" },
+        "category": { "type": "string", "enum": ["good", "bad", "other"], "description": "Category of the review" },
+        "authorName": { "type": "string", "description": "Display name of the author" },
+        "isAnonymous": { "type": "boolean", "description": "Whether the review is anonymous" },
+        "upvotes": { "type": "number", "description": "Number of upvotes" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Timestamp when created" },
+        "userId": { "type": "string", "description": "UID of the creator" }
+      },
+      "required": ["dishName", "restaurantName", "content", "rating", "category", "authorName", "isAnonymous", "upvotes", "createdAt", "userId"]
+    },
+    "Voter": {
+      "title": "Voter",
+      "description": "A record of a user who upvoted a review.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "UID of the voter" },
+        "timestamp": { "type": "string", "format": "date-time", "description": "When they voted" }
+      },
+      "required": ["uid", "timestamp"]
+    }
+  },
+  "firestore": {
+    "/reviews/{reviewId}": {
+      "schema": "Review",
+      "description": "Collection of food reviews"
+    },
+    "/reviews/{reviewId}/voters/{voterId}": {
+      "schema": "Voter",
+      "description": "Subcollection to track upvotes and prevent duplicates"
+    }
+  }
+}

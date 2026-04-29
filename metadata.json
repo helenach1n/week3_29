@@ -1,0 +1,6 @@
+{
+  "name": "校園美食評分",
+  "description": "一個讓學生匿名或開名分享校園美食評價、評分及查看排行榜的系統。支持實時更新、分類篩選及點贊功能。",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
