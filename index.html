@@ -215,30 +215,31 @@
     </div>
 
     <script>
-        // 1. API 配置：在此貼上部署後的 Web App URL
+        // ---------- API 配置 ----------
         const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzQTWi-cGE0sADrSbyL-6l0VdUZRjthGgeo_UaTXRkI2cIMqfY2osYIooNf7mWSokg/exec"; 
         
         let currentFilter = 'all';
 
-        // --- 欄位正規化：對應 Sheet header (ID / CreatedAt / Content / Category / Likes / Status) ---
+        // ---------- 欄位正規化：完全對應 Sheet header (大小階兼容) ----------
         function normalizeRecord(record) {
             return {
                 id: record.id || record.ID || "",
                 createdAt: record.createdAt || record.CreatedAt || "",
                 content: record.content || record.Content || "",
                 category: record.category || record.Category || "其他",
+                // likes 僅作備用，實際顯示用 upvotes
                 likes: Number(record.likes !== undefined ? record.likes : (record.Likes || 0)),
                 status: record.status || record.Status || "active",
-                // 保留其他可能欄位
+                // 以下欄位都支援大小寫 fallback，確保卡片完整顯示
                 dishName: record.dishName || record.DishName || "",
                 restaurantName: record.restaurantName || record.RestaurantName || "",
                 rating: record.rating || record.Rating || 3,
                 isAnonymous: record.isAnonymous !== undefined ? record.isAnonymous : (record.IsAnonymous || false),
-                upvotes: record.upvotes !== undefined ? record.upvotes : (record.Upvotes || 0)
+                upvotes: Number(record.upvotes !== undefined ? record.upvotes : (record.Upvotes || 0))
             };
         }
 
-        // --- 從 Sheet GET 拉資料（Week 5 新增） ---
+        // ---------- 從 Apps Script GET 拉資料 (doGet 回傳 { records: [...] }) ----------
         async function fetchRecordsFromSheet() {
             if (APPS_SCRIPT_URL.includes("PASTE")) return null;
             try {
@@ -252,7 +253,7 @@
             }
         }
 
-        // --- 載入資料：先從 Sheet GET，localStorage 做 fallback ---
+        // ---------- 載入資料：先從 Sheet GET，localStorage 做 fallback ----------
         async function loadData() {
             const remote = await fetchRecordsFromSheet();
             if (remote) {
@@ -263,14 +264,13 @@
             return data ? JSON.parse(data) : [];
         }
 
-        // 2. syncToSheet(payload) Helper（保持原樣）
+        // ---------- 同步至 Sheet (fire-and-forget，保留原 mode) ----------
         async function syncToSheet(payload) {
             if (!APPS_SCRIPT_URL || APPS_SCRIPT_URL.includes("PASTE_YOUR")) {
                 console.info("Apps Script URL 未設定，僅操作本地儲存");
                 return;
             }
             try {
-                // 使用 text/plain 繞過 CORS preflight 限制
                 await fetch(APPS_SCRIPT_URL, {
                     method: 'POST',
                     mode: 'no-cors', 
@@ -282,18 +282,18 @@
             }
         }
 
-        // --- Data Logic ---
-
+        // ---------- 儲存新留言：push 後即時 render，防止被舊 remote 覆蓋 ----------
         async function saveData(newRecord) {
             const records = await loadData();
             records.push(newRecord);
             localStorage.setItem("records", JSON.stringify(records));
-            // 背景同步至雲端
+            // 背景同步
             syncToSheet({ action: "create", record: newRecord });
-            // 直接用最新 records 即時渲染，唔會重新 GET 舊 remote 覆蓋新留言
+            // 直接傳入最新 records 渲染，唔會重新 GET
             await renderList(records);
         }
 
+        // ---------- 渲染留言列表 (支援傳入 recordsOverride) ----------
         async function renderList(recordsOverride) {
             const records = recordsOverride || await loadData();
             const search = document.getElementById('searchInput').value.toLowerCase();
@@ -377,8 +377,7 @@
             renderLeaderboard(records);
         }
 
-        // --- Helpers ---
-
+        // ---------- Helper functions ----------
         function toggleModal(show) {
             const modal = document.getElementById('reviewModal');
             modal.style.display = show ? 'flex' : 'none';
@@ -404,7 +403,6 @@
         async function handleFormSubmit(e) {
             e.preventDefault();
             
-            // 補充 ID 與 createdAt
             const newRecord = {
                 id: Date.now() + "_" + Math.random().toString(36).slice(2,6),
                 createdAt: new Date().toISOString(),
@@ -422,7 +420,6 @@
             toggleModal(false);
             e.target.reset();
             setRating(5);
-            // renderList() 已由 saveData 內部呼叫，唔需要再 call
         }
 
         async function toggleStatus(id) {
@@ -433,8 +430,6 @@
                 records[idx].status = newStatus;
                 localStorage.setItem('records', JSON.stringify(records));
                 await renderList(records);
-
-                // 同步至雲端 (修改)
                 syncToSheet({ action: "update", id: id, changes: { status: newStatus } });
             }
         }
@@ -446,8 +441,6 @@
                 records[idx].upvotes++;
                 localStorage.setItem('records', JSON.stringify(records));
                 await renderList(records);
-
-                // 同步至雲端 (修改)
                 syncToSheet({ action: "update", id: id, changes: { upvotes: records[idx].upvotes } });
             }
         }
@@ -458,8 +451,6 @@
             const filtered = records.filter(r => r.id !== id);
             localStorage.setItem('records', JSON.stringify(filtered));
             await renderList(filtered);
-
-            // 同步至雲端 (刪除)
             syncToSheet({ action: "delete", id: id });
         }
 
@@ -502,8 +493,7 @@
             });
         }
 
-        // --- Week 5：AI 功能（唔放 API key，全部經由後端 askAI） ---
-
+        // ---------- Week 5：AI 功能 (API key 只留在後端) ----------
         async function askAI(userPrompt) {
             const res = await fetch(APPS_SCRIPT_URL, {
                 method: "POST",
@@ -521,7 +511,10 @@
             text.textContent = '思考中...';
             try {
                 const records = await loadData();
-                if (records.length === 0) { alert('未有食評資料可以摘要'); return; }
+                if (records.length === 0) { 
+                    alert('未有食評資料可以摘要'); 
+                    return; 
+                }
                 const summaryInput = records.slice(0, 30).map(r =>
                     `[${r.category}] ${r.restaurantName} - ${r.dishName}: ${r.content}`
                 ).join('\n');
@@ -536,6 +529,7 @@
             }
         }
 
+        // ---------- 啟動 ----------
         window.onload = async () => {
             await renderList();
             lucide.createIcons();
