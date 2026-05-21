@@ -6,6 +6,8 @@
     <title>校園美食評分系統 - Connected</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Lucide icons (Week 5 AI 按鈕需要) -->
+    <script src="https://unpkg.com/lucide@latest"></script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&display=swap');
         
@@ -80,6 +82,11 @@
         </div>
 
         <div class="flex items-center gap-4">
+            <!-- Week 5：AI 摘要按鈕 -->
+            <button onclick="handleAISummary()" id="aiBtn" class="flex items-center gap-2 bg-zinc-800 text-zinc-100 px-4 py-2 rounded-full font-medium hover:bg-zinc-700 transition-colors active:scale-95 border border-zinc-700 disabled:opacity-50">
+                <i data-lucide="sparkles" class="w-4 h-4"></i>
+                <span id="aiBtnText" class="hidden sm:inline">AI 摘要</span>
+            </button>
             <div class="text-right hidden lg:block">
                 <div class="text-white text-xs font-black opacity-70 uppercase tracking-tighter">Powered by</div>
                 <div class="text-white text-sm font-black">GAS & STORAGE</div>
@@ -213,7 +220,50 @@
         
         let currentFilter = 'all';
 
-        // 2. syncToSheet(payload) Helper
+        // --- 欄位正規化：對應 Sheet header (ID / CreatedAt / Content / Category / Likes / Status) ---
+        function normalizeRecord(record) {
+            return {
+                id: record.id || record.ID || "",
+                createdAt: record.createdAt || record.CreatedAt || "",
+                content: record.content || record.Content || "",
+                category: record.category || record.Category || "其他",
+                likes: Number(record.likes !== undefined ? record.likes : (record.Likes || 0)),
+                status: record.status || record.Status || "active",
+                // 保留其他可能欄位
+                dishName: record.dishName || record.DishName || "",
+                restaurantName: record.restaurantName || record.RestaurantName || "",
+                rating: record.rating || record.Rating || 3,
+                isAnonymous: record.isAnonymous !== undefined ? record.isAnonymous : (record.IsAnonymous || false),
+                upvotes: record.upvotes !== undefined ? record.upvotes : (record.Upvotes || 0)
+            };
+        }
+
+        // --- 從 Sheet GET 拉資料（Week 5 新增） ---
+        async function fetchRecordsFromSheet() {
+            if (APPS_SCRIPT_URL.includes("PASTE")) return null;
+            try {
+                const res = await fetch(APPS_SCRIPT_URL);
+                const data = await res.json();
+                // doGet 回傳 { records: [...] }
+                return Array.isArray(data.records) ? data.records.map(normalizeRecord) : null;
+            } catch (e) {
+                console.warn("從 Sheet 讀取失敗", e);
+                return null;
+            }
+        }
+
+        // --- 載入資料：先從 Sheet GET，localStorage 做 fallback ---
+        async function loadData() {
+            const remote = await fetchRecordsFromSheet();
+            if (remote) {
+                localStorage.setItem("records", JSON.stringify(remote));
+                return remote;
+            }
+            const data = localStorage.getItem("records");
+            return data ? JSON.parse(data) : [];
+        }
+
+        // 2. syncToSheet(payload) Helper（保持原樣）
         async function syncToSheet(payload) {
             if (!APPS_SCRIPT_URL || APPS_SCRIPT_URL.includes("PASTE_YOUR")) {
                 console.info("Apps Script URL 未設定，僅操作本地儲存");
@@ -234,22 +284,18 @@
 
         // --- Data Logic ---
 
-        function saveData(newRecord) {
-            const records = loadData();
+        async function saveData(newRecord) {
+            const records = await loadData();
             records.push(newRecord);
-            localStorage.setItem('records', JSON.stringify(records));
-            
-            // 同步至雲端 (新增)
+            localStorage.setItem("records", JSON.stringify(records));
+            // 背景同步至雲端
             syncToSheet({ action: "create", record: newRecord });
+            // 直接用最新 records 即時渲染，唔會重新 GET 舊 remote 覆蓋新留言
+            await renderList(records);
         }
 
-        function loadData() {
-            const rawData = localStorage.getItem('records');
-            return rawData ? JSON.parse(rawData) : [];
-        }
-
-        function renderList() {
-            const records = loadData();
+        async function renderList(recordsOverride) {
+            const records = recordsOverride || await loadData();
             const search = document.getElementById('searchInput').value.toLowerCase();
             const container = document.getElementById('recordsList');
             
@@ -346,16 +392,16 @@
             }
         }
 
-        function setFilter(filter) {
+        async function setFilter(filter) {
             currentFilter = filter;
             document.querySelectorAll('nav button').forEach(btn => {
                 const isMatch = btn.id === `filter-${filter}`;
                 btn.className = `px-6 py-2 rounded-full text-sm font-black whitespace-nowrap transition-all border-2 ${isMatch ? 'bg-primary border-primary text-white' : 'border-primary-soft text-text-muted hover:border-primary/40'}`;
             });
-            renderList();
+            await renderList();
         }
 
-        function handleFormSubmit(e) {
+        async function handleFormSubmit(e) {
             e.preventDefault();
             
             // 補充 ID 與 createdAt
@@ -372,46 +418,46 @@
                 status: "active" 
             };
 
-            saveData(newRecord);
+            await saveData(newRecord);
             toggleModal(false);
             e.target.reset();
             setRating(5);
-            renderList();
+            // renderList() 已由 saveData 內部呼叫，唔需要再 call
         }
 
-        function toggleStatus(id) {
-            const records = loadData();
+        async function toggleStatus(id) {
+            const records = await loadData();
             const idx = records.findIndex(r => r.id === id);
             if (idx !== -1) {
                 const newStatus = records[idx].status === 'done' ? 'active' : 'done';
                 records[idx].status = newStatus;
                 localStorage.setItem('records', JSON.stringify(records));
-                renderList();
+                await renderList(records);
 
                 // 同步至雲端 (修改)
                 syncToSheet({ action: "update", id: id, changes: { status: newStatus } });
             }
         }
 
-        function handleUpvote(id) {
-            const records = loadData();
+        async function handleUpvote(id) {
+            const records = await loadData();
             const idx = records.findIndex(r => r.id === id);
             if (idx !== -1) {
                 records[idx].upvotes++;
                 localStorage.setItem('records', JSON.stringify(records));
-                renderList();
+                await renderList(records);
 
                 // 同步至雲端 (修改)
                 syncToSheet({ action: "update", id: id, changes: { upvotes: records[idx].upvotes } });
             }
         }
 
-        function deleteRecord(id) {
+        async function deleteRecord(id) {
             if (!confirm('確定要刪除這條記錄嗎？')) return;
-            const records = loadData();
+            const records = await loadData();
             const filtered = records.filter(r => r.id !== id);
             localStorage.setItem('records', JSON.stringify(filtered));
-            renderList();
+            await renderList(filtered);
 
             // 同步至雲端 (刪除)
             syncToSheet({ action: "delete", id: id });
@@ -456,7 +502,44 @@
             });
         }
 
-        window.onload = () => renderList();
+        // --- Week 5：AI 功能（唔放 API key，全部經由後端 askAI） ---
+
+        async function askAI(userPrompt) {
+            const res = await fetch(APPS_SCRIPT_URL, {
+                method: "POST",
+                headers: { "Content-Type": "text/plain" },
+                body: JSON.stringify({ action: "askAI", prompt: userPrompt })
+            });
+            const data = await res.json();
+            return data.result || data.error || "AI 冇回應";
+        }
+
+        async function handleAISummary() {
+            const btn = document.getElementById('aiBtn');
+            const text = document.getElementById('aiBtnText');
+            btn.disabled = true;
+            text.textContent = '思考中...';
+            try {
+                const records = await loadData();
+                if (records.length === 0) { alert('未有食評資料可以摘要'); return; }
+                const summaryInput = records.slice(0, 30).map(r =>
+                    `[${r.category}] ${r.restaurantName} - ${r.dishName}: ${r.content}`
+                ).join('\n');
+                const prompt = '以下是校園美食評分平台嘅留言。請用繁體中文，用 3-5 句概括同學最常評論嘅餐廳、熱門菜式、整體滿意度同有冇明顯 patterns:\n\n' + summaryInput;
+                const result = await askAI(prompt);
+                alert(result);
+            } catch (e) {
+                alert('AI 出錯：' + e.message);
+            } finally {
+                btn.disabled = false;
+                text.textContent = 'AI 摘要';
+            }
+        }
+
+        window.onload = async () => {
+            await renderList();
+            lucide.createIcons();
+        };
     </script>
 </body>
 </html>
