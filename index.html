@@ -6,7 +6,6 @@
     <title>校園美食評分系統 - Connected</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <!-- Lucide icons (Week 5 AI 按鈕需要) -->
     <script src="https://unpkg.com/lucide@latest"></script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&display=swap');
@@ -82,7 +81,6 @@
         </div>
 
         <div class="flex items-center gap-4">
-            <!-- Week 5：AI 摘要按鈕 -->
             <button onclick="handleAISummary()" id="aiBtn" class="flex items-center gap-2 bg-zinc-800 text-zinc-100 px-4 py-2 rounded-full font-medium hover:bg-zinc-700 transition-colors active:scale-95 border border-zinc-700 disabled:opacity-50">
                 <i data-lucide="sparkles" class="w-4 h-4"></i>
                 <span id="aiBtnText" class="hidden sm:inline">AI 摘要</span>
@@ -215,37 +213,34 @@
     </div>
 
     <script>
-        // ---------- API 配置 ----------
-        const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzQTWi-cGE0sADrSbyL-6l0VdUZRjthGgeo_UaTXRkI2cIMqfY2osYIooNf7mWSokg/exec"; 
+        // 1. 請貼上你嘅 Web App URL（部署後）
+        const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyjrrdTGy9IoWS5oaSWCeFQkw88cVWiGLCLlvIXs6WjpuRfn_XbaZJoivs-KBzrYsJJ/exec"; 
         
         let currentFilter = 'all';
 
-        // ---------- 欄位正規化：完全對應 Sheet header (大小階兼容) ----------
+        // --- 欄位正規化 ---
         function normalizeRecord(record) {
             return {
                 id: record.id || record.ID || "",
                 createdAt: record.createdAt || record.CreatedAt || "",
                 content: record.content || record.Content || "",
-                category: record.category || record.Category || "其他",
-                // likes 僅作備用，實際顯示用 upvotes
+                category: record.category || record.Category || "other",
                 likes: Number(record.likes !== undefined ? record.likes : (record.Likes || 0)),
                 status: record.status || record.Status || "active",
-                // 以下欄位都支援大小寫 fallback，確保卡片完整顯示
                 dishName: record.dishName || record.DishName || "",
                 restaurantName: record.restaurantName || record.RestaurantName || "",
                 rating: record.rating || record.Rating || 3,
                 isAnonymous: record.isAnonymous !== undefined ? record.isAnonymous : (record.IsAnonymous || false),
-                upvotes: Number(record.upvotes !== undefined ? record.upvotes : (record.Upvotes || 0))
+                upvotes: record.upvotes !== undefined ? record.upvotes : (record.Upvotes || 0)
             };
         }
 
-        // ---------- 從 Apps Script GET 拉資料 (doGet 回傳 { records: [...] }) ----------
+        // --- 從 Sheet GET 拉資料 ---
         async function fetchRecordsFromSheet() {
-            if (APPS_SCRIPT_URL.includes("PASTE")) return null;
+            if (!APPS_SCRIPT_URL || APPS_SCRIPT_URL.includes("PASTE")) return null;
             try {
                 const res = await fetch(APPS_SCRIPT_URL);
                 const data = await res.json();
-                // doGet 回傳 { records: [...] }
                 return Array.isArray(data.records) ? data.records.map(normalizeRecord) : null;
             } catch (e) {
                 console.warn("從 Sheet 讀取失敗", e);
@@ -253,18 +248,27 @@
             }
         }
 
-        // ---------- 載入資料：先從 Sheet GET，localStorage 做 fallback ----------
+        // --- 載入資料：優先伺服器，再 fallback localStorage ---
         async function loadData() {
             const remote = await fetchRecordsFromSheet();
             if (remote) {
-                localStorage.setItem("records", JSON.stringify(remote));
+                try {
+                    localStorage.setItem("records", JSON.stringify(remote));
+                } catch (e) {
+                    // 無痕模式可能無法寫入，忽略
+                }
                 return remote;
             }
-            const data = localStorage.getItem("records");
-            return data ? JSON.parse(data) : [];
+            // fallback
+            try {
+                const data = localStorage.getItem("records");
+                return data ? JSON.parse(data) : [];
+            } catch (e) {
+                return [];
+            }
         }
 
-        // ---------- 同步至 Sheet (fire-and-forget，保留原 mode) ----------
+        // --- 背景同步（唔等結果，只負責發送）---
         async function syncToSheet(payload) {
             if (!APPS_SCRIPT_URL || APPS_SCRIPT_URL.includes("PASTE_YOUR")) {
                 console.info("Apps Script URL 未設定，僅操作本地儲存");
@@ -273,7 +277,7 @@
             try {
                 await fetch(APPS_SCRIPT_URL, {
                     method: 'POST',
-                    mode: 'no-cors', 
+                    mode: 'no-cors',
                     headers: { 'Content-Type': 'text/plain' },
                     body: JSON.stringify(payload)
                 });
@@ -282,20 +286,43 @@
             }
         }
 
-        // ---------- 儲存新留言：push 後即時 render，防止被舊 remote 覆蓋 ----------
+        // --- 核心：新增後重新 fetch 最新資料 ---
         async function saveData(newRecord) {
-            const records = await loadData();
-            records.push(newRecord);
-            localStorage.setItem("records", JSON.stringify(records));
-            // 背景同步
-            syncToSheet({ action: "create", record: newRecord });
-            // 直接傳入最新 records 渲染，唔會重新 GET
-            await renderList(records);
+            // 先背景發送 create
+            await syncToSheet({ action: "create", record: newRecord });
+            // 立即由伺服器拉最新清單
+            const latestRecords = await fetchRecordsFromSheet();
+            if (latestRecords) {
+                // 更新本地緩存
+                try { localStorage.setItem("records", JSON.stringify(latestRecords)); } catch(e){}
+                await renderList(latestRecords);
+            } else {
+                // fallback: 用本地 array 加返新 record（避免空白）
+                const oldData = await loadData(); // 可能係 localStorage 舊資料
+                oldData.push(newRecord);
+                await renderList(oldData);
+            }
         }
 
-        // ---------- 渲染留言列表 (支援傳入 recordsOverride) ----------
+        // --- 重新 fetch 並 render（用於 upvote/toggle/delete 後）---
+        async function refreshAndRender() {
+            const latest = await fetchRecordsFromSheet();
+            if (latest) {
+                try { localStorage.setItem("records", JSON.stringify(latest)); } catch(e){}
+                await renderList(latest);
+            } else {
+                // 如果 fetch 失敗，用返現有 localStorage 資料
+                const data = await loadData();
+                await renderList(data);
+            }
+        }
+
+        // --- 顯示食評列表 ---
         async function renderList(recordsOverride) {
-            const records = recordsOverride || await loadData();
+            let records = recordsOverride;
+            if (!records) {
+                records = await loadData();
+            }
             const search = document.getElementById('searchInput').value.toLowerCase();
             const container = document.getElementById('recordsList');
             
@@ -377,7 +404,7 @@
             renderLeaderboard(records);
         }
 
-        // ---------- Helper functions ----------
+        // --- Modal 同表單 ---
         function toggleModal(show) {
             const modal = document.getElementById('reviewModal');
             modal.style.display = show ? 'flex' : 'none';
@@ -416,10 +443,23 @@
                 status: "active" 
             };
 
-            await saveData(newRecord);
+            await saveData(newRecord);  // 內部會重新 fetch 同 render
             toggleModal(false);
             e.target.reset();
             setRating(5);
+        }
+
+        // --- 操作：讚好、切換狀態、刪除 ---
+        async function handleUpvote(id) {
+            // 背景更新 upvote
+            const records = await loadData();
+            const idx = records.findIndex(r => r.id === id);
+            if (idx !== -1) {
+                const newUpvotes = (records[idx].upvotes || 0) + 1;
+                await syncToSheet({ action: "update", id: id, changes: { upvotes: newUpvotes } });
+            }
+            // 重新 fetch 伺服器最新狀態
+            await refreshAndRender();
         }
 
         async function toggleStatus(id) {
@@ -427,33 +467,18 @@
             const idx = records.findIndex(r => r.id === id);
             if (idx !== -1) {
                 const newStatus = records[idx].status === 'done' ? 'active' : 'done';
-                records[idx].status = newStatus;
-                localStorage.setItem('records', JSON.stringify(records));
-                await renderList(records);
-                syncToSheet({ action: "update", id: id, changes: { status: newStatus } });
+                await syncToSheet({ action: "update", id: id, changes: { status: newStatus } });
             }
-        }
-
-        async function handleUpvote(id) {
-            const records = await loadData();
-            const idx = records.findIndex(r => r.id === id);
-            if (idx !== -1) {
-                records[idx].upvotes++;
-                localStorage.setItem('records', JSON.stringify(records));
-                await renderList(records);
-                syncToSheet({ action: "update", id: id, changes: { upvotes: records[idx].upvotes } });
-            }
+            await refreshAndRender();
         }
 
         async function deleteRecord(id) {
             if (!confirm('確定要刪除這條記錄嗎？')) return;
-            const records = await loadData();
-            const filtered = records.filter(r => r.id !== id);
-            localStorage.setItem('records', JSON.stringify(filtered));
-            await renderList(filtered);
-            syncToSheet({ action: "delete", id: id });
+            await syncToSheet({ action: "delete", id: id });
+            await refreshAndRender();
         }
 
+        // --- 排行榜 ---
         function renderLeaderboard(records) {
             const container = document.getElementById('leaderboardList');
             const scores = {};
@@ -493,7 +518,7 @@
             });
         }
 
-        // ---------- Week 5：AI 功能 (API key 只留在後端) ----------
+        // --- AI 功能 ---
         async function askAI(userPrompt) {
             const res = await fetch(APPS_SCRIPT_URL, {
                 method: "POST",
@@ -511,10 +536,7 @@
             text.textContent = '思考中...';
             try {
                 const records = await loadData();
-                if (records.length === 0) { 
-                    alert('未有食評資料可以摘要'); 
-                    return; 
-                }
+                if (records.length === 0) { alert('未有食評資料可以摘要'); return; }
                 const summaryInput = records.slice(0, 30).map(r =>
                     `[${r.category}] ${r.restaurantName} - ${r.dishName}: ${r.content}`
                 ).join('\n');
@@ -529,7 +551,7 @@
             }
         }
 
-        // ---------- 啟動 ----------
+        // --- 啟動 ---
         window.onload = async () => {
             await renderList();
             lucide.createIcons();
